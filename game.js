@@ -63,12 +63,13 @@ const SPEEDS = [0, 85, 55, 32];  // speed based by size
 const POINTS = [0, 100, 50, 20]; // points by size
 
 class Asteroid {
-  constructor(x, y, size = 3) {
+  constructor(x, y, size = 3, chainId = 0) {
     this.x    = x;
     this.y    = y;
     this.size = size;
     this.radius = RADII[size];
     this.dead = false;
+    this.chainId = chainId;
 
     const angle = rand(0, Math.PI * 2);
     const speed = SPEEDS[size] + rand(-15, 15);
@@ -95,10 +96,12 @@ class Asteroid {
 
   split() {
     if (this.size <= 1) return [];
-    return [
-      new Asteroid(this.x, this.y, this.size - 1),
-      new Asteroid(this.x, this.y, this.size - 1),
+    const children = [
+      new Asteroid(this.x, this.y, this.size - 1, this.chainId),
+      new Asteroid(this.x, this.y, this.size - 1, this.chainId),
     ];
+    chainState.set(this.chainId, chainState.get(this.chainId) + 2);
+    return children;
   }
 
   draw() {
@@ -133,12 +136,18 @@ class Ship {
     this.invincible    = 3;
     this.shootCooldown = 0;
     this.dead          = false;
+    this.boost         = 0;
+  }
+
+  activateBoost() {
+    this.boost = 5;
   }
 
   update(dt) {
     if (this.dead) return;
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
+    if (this.boost > 0) this.boost -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = 260;  // px/s²
@@ -149,8 +158,9 @@ class Ship {
 
     this.thrusting = !!keys['ArrowUp'];
     if (this.thrusting) {
-      this.vx += Math.cos(this.angle) * THRUST * dt;
-      this.vy += Math.sin(this.angle) * THRUST * dt;
+      const thrust = this.boost > 0 ? THRUST * 1.5 : THRUST;
+      this.vx += Math.cos(this.angle) * thrust * dt;
+      this.vy += Math.sin(this.angle) * thrust * dt;
     }
 
     this.vx *= DRAG;
@@ -173,10 +183,18 @@ class Ship {
     // Flicker during respawn invincibility
     if (this.invincible > 0 && Math.floor(this.invincible * 8) % 2 === 0) return;
 
+    // Boost flicker — gets faster as the 5 seconds run out
+    let boostFlicker = false;
+    if (this.boost > 0) {
+      const elapsed = 5 - this.boost;
+      const flickerRate = this.boost > 4 ? 8 : this.boost > 3 ? 10 : this.boost > 2 ? 12 : this.boost > 1 ? 14 : 16;
+      boostFlicker = Math.floor(elapsed * flickerRate) % 2 === 0;
+    }
+
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = this.boost > 0 ? (boostFlicker ? '#ff0' : '#fff') : '#fff';
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
@@ -240,6 +258,8 @@ let ship, bullets, asteroids, particles;
 let score, lives, level;
 let state; // 'playing' | 'dead' | 'gameover'
 let deadTimer;
+let nextChainId = 0;
+const chainState = new Map();
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -249,11 +269,15 @@ function spawnAsteroids(count) {
       x = rand(0, W);
       y = rand(0, H);
     } while (Math.hypot(x - W / 2, y - H / 2) < SAFE_DIST);
-    asteroids.push(new Asteroid(x, y, 3));
+    const chainId = ++nextChainId;
+    chainState.set(chainId, 1);
+    asteroids.push(new Asteroid(x, y, 3, chainId));
   }
 }
 
 function initGame() {
+  nextChainId = 0;
+  chainState.clear();
   ship          = new Ship();
   bullets   = [];
   asteroids = [];
@@ -329,12 +353,26 @@ function update(dt) {
         a.dead = true;
         score += POINTS[a.size];
         explode(a.x, a.y, a.size * 5);
+
+        const chain = chainState.get(a.chainId);
+        if (chain !== undefined) {
+          chainState.set(a.chainId, chain - 1);
+        }
+
         newAsteroids.push(...a.split());
       }
     }
   }
   asteroids = asteroids.filter(a => !a.dead).concat(newAsteroids);
   bullets   = bullets.filter(b => !b.dead);
+
+  // Check for completed chains (large asteroid + all pieces destroyed)
+  for (const [chainId, remaining] of chainState) {
+    if (remaining === 0) {
+      ship.activateBoost();
+      chainState.delete(chainId);
+    }
+  }
 
   // Ship vs Asteroid
   if (ship.invincible <= 0) {
