@@ -61,6 +61,49 @@ class Bullet {
   }
 }
 
+/* ============================ SUPER BULLET ============================ */
+const SUPER_CHARGE_TIME     = 3;    // seconds of continuous Alt/Option+Space hold
+const SUPER_SHOTS_PER_LEVEL = 3;
+const SUPER_COLOR           = '#7cc7ff';
+
+// "Big shoot": hold Alt/Option (⌥) + Space for SUPER_CHARGE_TIME seconds to charge.
+// Deals double damage by vaporizing an entire asteroid chain in one hit.
+class SuperBullet {
+  constructor(x, y, angle) {
+    this.x = x;
+    this.y = y;
+    this.super = true;
+    const SPEED = 520;
+    this.vx = Math.cos(angle) * SPEED;
+    this.vy = Math.sin(angle) * SPEED;
+    this.ttl   = 2.2;   // long enough to cross the screen
+    this.radius = 5;
+    this.dead = false;
+  }
+
+  update(dt) {
+    this.x = wrap(this.x + this.vx * dt, W);
+    this.y = wrap(this.y + this.vy * dt, H);
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    // Soft outer glow
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = SUPER_COLOR;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright core
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#e6f6ff';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * 0.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 /* ============================== ASTEROID ============================== */
 const RADII  = [0, 16, 30, 50];  // by size 1, 2, 3
 const SPEEDS = [0, 85, 55, 32];  // speed based by size
@@ -372,6 +415,10 @@ let state; // 'playing' | 'dead' | 'gameover'
 let deadTimer;
 let nextChainId = 0;
 const chainState = new Map();
+let superShots = SUPER_SHOTS_PER_LEVEL; // big shoots available this level
+let chargeTime = 0;                     // seconds of continuous Alt/Option+Space hold
+let chargeReady = false;                // charge full → fires when the keys are released
+let shockwaves = [];                    // expanding rings for feedback {x, y, ttl, life, maxR}
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -405,6 +452,10 @@ function initGame() {
   lives  = 3;
   level  = 1;
   state  = 'playing';
+  superShots = SUPER_SHOTS_PER_LEVEL;
+  chargeTime = 0;
+  chargeReady = false;
+  shockwaves = [];
   spawnAsteroids(4);
 }
 
@@ -413,6 +464,10 @@ function nextLevel() {
   bullets   = [];
   particles = [];
   ship.reset();
+  superShots = SUPER_SHOTS_PER_LEVEL;
+  chargeTime = 0;
+  chargeReady = false;
+  shockwaves = [];
   spawnAsteroids(3 + level);
 }
 
@@ -423,6 +478,8 @@ function explode(x, y, count = 8, color = '#fff') {
 function killShip() {
   explode(ship.x, ship.y, 14);
   ship.dead = true;
+  chargeTime = 0; // cancel any charge in progress
+  chargeReady = false;
   lives--;
   if (lives <= 0) {
     state = 'gameover';
@@ -440,6 +497,8 @@ function update(dt) {
     particles = particles.filter(p => !p.dead);
     popups.forEach(p => p.ttl -= dt);
     popups = popups.filter(p => p.ttl > 0);
+    shockwaves.forEach(s => s.ttl -= dt);
+    shockwaves = shockwaves.filter(s => s.ttl > 0);
     return;
   }
 
@@ -449,14 +508,43 @@ function update(dt) {
     particles = particles.filter(p => !p.dead);
     popups.forEach(p => p.ttl -= dt);
     popups = popups.filter(p => p.ttl > 0);
+    shockwaves.forEach(s => s.ttl -= dt);
+    shockwaves = shockwaves.filter(s => s.ttl > 0);
     asteroids.forEach(a => a.update(dt));
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
     return;
   }
 
   // Disparar
+  const altKeyHeld = keys['AltLeft'] || keys['AltRight'];
   if (pressed('Space')) {
-    bullets.push(...ship.tryShoot());
+    if (altKeyHeld && superShots > 0) {
+      // Alt/Option held → begin charging the super shot (no normal bullet)
+      chargeTime = 0;
+    } else {
+      bullets.push(...ship.tryShoot());
+    }
+  }
+
+  // Super shoot: hold Alt/Option (⌥) + Space for SUPER_CHARGE_TIME seconds to charge;
+  // the shot only fires when the player RELEASES the keys (Space or Alt/Option).
+  if (keys['Space'] && altKeyHeld && superShots > 0) {
+    chargeTime = Math.min(chargeTime + dt, SUPER_CHARGE_TIME);
+    if (chargeTime >= SUPER_CHARGE_TIME) chargeReady = true;
+  } else {
+    // Released → fire if the charge was complete
+    if (chargeReady && superShots > 0) {
+      superShots--;
+      const NOSE = 21;
+      const ox = ship.x + Math.cos(ship.angle) * NOSE;
+      const oy = ship.y + Math.sin(ship.angle) * NOSE;
+      bullets.push(new SuperBullet(ox, oy, ship.angle));
+      // Obvious feedback: nose flash + expanding shockwave ring
+      explode(ox, oy, 14, SUPER_COLOR);
+      shockwaves.push({ x: ox, y: oy, ttl: 0.5, life: 0.5, maxR: 64 });
+    }
+    chargeTime = 0;
+    chargeReady = false;
   }
 
   ship.update(dt);
@@ -468,6 +556,8 @@ function update(dt) {
   particles = particles.filter(p => !p.dead);
   popups.forEach(p => p.ttl -= dt);
   popups = popups.filter(p => p.ttl > 0);
+  shockwaves.forEach(s => s.ttl -= dt);
+  shockwaves = shockwaves.filter(s => s.ttl > 0);
 
   // Shooting star: spawn / advance / expire
   if (!star) {
@@ -481,20 +571,39 @@ function update(dt) {
   // Bullet vs Asteroid
   const newAsteroids = [];
   for (const b of bullets) {
+    if (b.dead) continue;
     for (const a of asteroids) {
-      if (!a.dead && !b.dead && dist(b, a) < a.radius) {
-        b.dead = true;
-        a.dead = true;
-        score += POINTS[a.size];
-        explode(a.x, a.y, a.size * 5);
+      if (a.dead || dist(b, a) >= a.radius) continue;
 
-        const chain = chainState.get(a.chainId);
-        if (chain !== undefined) {
-          chainState.set(a.chainId, chain - 1);
+      if (b.super) {
+        // SUPER SHOT: double damage → vaporize the entire chain
+        let total = 0;
+        for (const o of asteroids) {
+          if (!o.dead && o.chainId === a.chainId) {
+            o.dead = true;
+            total += POINTS[o.size];
+            explode(o.x, o.y, o.size * 6, SUPER_COLOR);
+          }
         }
-
-        newAsteroids.push(...a.split());
+        score += total;
+        b.dead = true;
+        chainState.set(a.chainId, 0); // chain complete → boost granted below
+        popups.push({ x: a.x, y: a.y, text: `+${total}`, ttl: 1, life: 1 });
+        break;
       }
+
+      // Normal hit
+      b.dead = true;
+      a.dead = true;
+      score += POINTS[a.size];
+      explode(a.x, a.y, a.size * 5);
+
+      const chain = chainState.get(a.chainId);
+      if (chain !== undefined) {
+        chainState.set(a.chainId, chain - 1);
+      }
+
+      newAsteroids.push(...a.split());
     }
   }
   asteroids = asteroids.filter(a => !a.dead).concat(newAsteroids);
@@ -555,6 +664,22 @@ function drawLifeIcon(x, y) {
   ctx.restore();
 }
 
+function drawSuperIcon(x, y, active) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = active ? 1 : 0.22;
+  ctx.fillStyle = SUPER_COLOR;
+  ctx.beginPath();
+  ctx.arc(0, 0, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = active ? 1 : 0.22;
+  ctx.fillStyle = '#e6f6ff';
+  ctx.beginPath();
+  ctx.arc(0, 0, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '15px monospace';
@@ -567,6 +692,22 @@ function drawHUD() {
 
   for (let i = 0; i < lives; i++)
     drawLifeIcon(W - 16 - i * 22, 18);
+
+  // Super shots available this level
+  for (let i = 0; i < SUPER_SHOTS_PER_LEVEL; i++)
+    drawSuperIcon(W - 16 - i * 16, 40, i < superShots);
+
+  // Charge bar while Alt/Option+Space is charging a super shot
+  if (keys['Space'] && (keys['AltLeft'] || keys['AltRight']) && superShots > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(W / 2 - 50, H - 22, 100, 6);
+    ctx.fillStyle = SUPER_COLOR;
+    ctx.fillRect(W / 2 - 50, H - 22, 100 * Math.min(1, chargeTime / SUPER_CHARGE_TIME), 6);
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = chargeReady ? '#fff' : SUPER_COLOR;
+    ctx.fillText(chargeReady ? 'RELEASE TO FIRE' : 'SUPER', W / 2, H - 30);
+  }
 
 }
 
@@ -601,6 +742,17 @@ function draw() {
   if (star) star.draw();
   bullets.forEach(b => b.draw());
   ship.draw();
+
+  // Expanding feedback rings from firing a super shot
+  for (const s of shockwaves) {
+    const t = 1 - s.ttl / s.life;
+    ctx.strokeStyle = `rgba(124,199,255,${(0.9 * (1 - t)).toFixed(2)})`;
+    ctx.lineWidth = 3 * (1 - t) + 0.5;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 8 + t * s.maxR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   drawPopups();
   drawHUD();
 
