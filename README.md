@@ -32,14 +32,16 @@ Then visit `http://localhost:3000`.
 
 ## Scoring
 
-| Asteroid | Points |
-| -------- | ------ |
-| Large    | 20     |
-| Medium   | 50     |
-| Small    | 100    |
+| Asteroid      | Points |
+| ------------- | ------ |
+| Large         | 20     |
+| Medium        | 50     |
+| Small         | 100    |
+| Shooting star | 1000   |
 
 ## Features
 
 - 3 lives with temporary invincibility upon respawning (flicker effect)
 - Asteroids split into smaller fragments when destroyed
 - Explosion particles when destroying asteroids
+- A blue shooting star suddenly streaks across the screen at random intervals — shoot it for 1000 points before it fades away or flies off-screen
