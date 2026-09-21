@@ -273,21 +273,33 @@ class ShootingStar {
 }
 
 /* ========================= SHIP ========================= */
+const CHARGE_TIME    = 2.0;  // seconds holding Shift+Space to charge a burst
+const BURST_SHOTS    = 3;    // bullets per burst
+const BURST_INTERVAL = 0.1;  // seconds between burst bullets
+
 class Ship {
   constructor() { this.reset(); }
 
   reset() {
-    this.x      = W / 2;
-    this.y      = H / 2;
-    this.angle  = -Math.PI / 2;
-    this.vx     = 0;
-    this.vy     = 0;
-    this.radius = 12;
-    this.thrusting     = false;
-    this.invincible    = 3;
+    this.x         = W / 2;
+    this.y         = H / 2;
+    this.angle     = -Math.PI / 2;
+    this.vx        = 0;
+    this.vy        = 0;
+    this.radius    = 12;
+    this.thrusting = false;
+    this.invincible = 3;
+    this.dead         = false;
+    // Plain shot: pressing Space fires one bullet (as before)
     this.shootCooldown = 0;
-    this.dead          = false;
-    this.shield        = 0;  // seconds of shield remaining (0 = none)
+    this.shield       = 0;  // seconds of shield remaining (0 = none)
+    // Triple shot: hold Shift+Space, release to fire a 3-bullet burst
+    this.chargeHold   = 0;        // seconds accumulated holding Shift+Space
+    this.charged      = false;    // charge complete (≥ CHARGE_TIME): releasing fires 3
+    this.wasSpaceHeld = false;    // Space held state from the previous frame
+    this.burst        = 0;        // bullets remaining in the current burst
+    this.burstTimer   = 0;        // time until the next burst bullet
+    this.burstFlash   = 0;        // visual flash when firing the burst
   }
 
   activateShield() {
@@ -297,7 +309,8 @@ class Ship {
 
   update(dt) {
     if (this.dead) return;
-    if (this.invincible    > 0) this.invincible    -= dt;
+    if (this.invincible > 0) this.invincible -= dt;
+    if (this.burstFlash > 0) this.burstFlash -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.shield > 0) this.shield -= dt;
 
@@ -329,10 +342,73 @@ class Ship {
     return [new Bullet(ox, oy, this.angle)];
   }
 
+  // Triple shot: hold Shift+Space, release to fire 3 rapid shots.
+  // Releasing Space before the charge is full fires nothing. Space without Shift is handled by tryShoot.
+  shootCharge(dt) {
+    if (this.dead) return [];
+
+    const spaceHeld = !!keys['Space'];
+    const shiftHeld = !!(keys['ShiftLeft'] || keys['ShiftRight']);
+
+    if (spaceHeld && shiftHeld) {
+      // Only charges while Shift and Space are both held
+      if (!this.charged) {
+        this.chargeHold += dt;
+        if (this.chargeHold >= CHARGE_TIME) this.charged = true;
+      }
+    } else {
+      // Space released: if the charge was complete, fire the triple burst
+      if (this.wasSpaceHeld && !spaceHeld && this.charged) {
+        this.burst      = BURST_SHOTS;
+        this.burstTimer = 0;        // first burst bullet fires immediately
+        this.burstFlash = 0.35;
+      }
+      // Releasing Space resets the charge (releasing only Shift pauses it)
+      if (!spaceHeld) {
+        this.chargeHold = 0;
+        this.charged    = false;
+      }
+    }
+    this.wasSpaceHeld = spaceHeld;
+
+    // Deploy the burst (after release, even with no keys still held)
+    const shots = [];
+    if (this.burst > 0) {
+      this.burstTimer -= dt;
+      if (this.burstTimer <= 0) {
+        const NOSE = 21;
+        const ox = this.x + Math.cos(this.angle) * NOSE;
+        const oy = this.y + Math.sin(this.angle) * NOSE;
+        shots.push(new Bullet(ox, oy, this.angle));
+        this.burst--;
+        this.burstTimer = BURST_INTERVAL;
+        this.burstFlash = 0.18;
+      }
+    }
+    return shots;
+  }
+
   draw() {
     if (this.dead) return;
     // Flicker during respawn invincibility
     if (this.invincible > 0 && Math.floor(this.invincible * 8) % 2 === 0) return;
+
+// Charge glow and burst flash (behind the ship)
+    const charge = Math.min(1, this.chargeHold / CHARGE_TIME);
+    const t      = this.charged ? 1 : charge;
+    const flash  = this.burstFlash > 0 ? Math.min(1, this.burstFlash / 0.35) : 0;
+    if (t > 0 || flash > 0) {
+      const glowR = 24 + t * 14 + flash * 10;
+      const glowA = 0.15 + t * 0.4 + flash * 0.4;
+      const cr = 255;
+      const cg = Math.round(255 - t * 115);
+      const cb = Math.round(255 - t * 255);
+      const grad = ctx.createRadialGradient(this.x, this.y, 6, this.x, this.y, glowR);
+      grad.addColorStop(0, `rgba(${cr},${cg},${cb},${glowA})`);
+      grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(this.x - glowR, this.y - glowR, glowR * 2, glowR * 2);
+    }
 
     ctx.save();
     ctx.translate(this.x, this.y);
@@ -522,9 +598,12 @@ function update(dt) {
     return;
   }
 
-  // Disparar
+// Shoot
   const altKeyHeld = keys['AltLeft'] || keys['AltRight'];
-  if (pressed('Space')) {
+  const shiftHeld  = keys['ShiftLeft'] || keys['ShiftRight'];
+
+  // Plain shot: press Space with no modifier held → one bullet
+  if (pressed('Space') && !shiftHeld) {
     if (altKeyHeld && superShots > 0) {
       // Alt/Option held → begin charging the super shot (no normal bullet)
       chargeTime = 0;
@@ -553,6 +632,9 @@ function update(dt) {
     chargeTime = 0;
     chargeReady = false;
   }
+
+  // Triple shot: hold Shift+Space, release to fire a 3-bullet burst
+  bullets.push(...ship.shootCharge(dt));
 
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
@@ -594,7 +676,7 @@ function update(dt) {
         }
         score += total;
         b.dead = true;
-        chainState.set(a.chainId, 0); // chain complete → boost granted below
+        chainState.set(a.chainId, 0); // chain complete → shield granted below
         popups.push({ x: a.x, y: a.y, text: `+${total}`, ttl: 1, life: 1 });
         break;
       }
@@ -760,7 +842,7 @@ function draw() {
   bullets.forEach(b => b.draw());
   ship.draw();
 
-  // Expanding feedback rings from firing a super shot
+// Expanding feedback rings from firing a super shot
   for (const s of shockwaves) {
     const t = 1 - s.ttl / s.life;
     ctx.strokeStyle = `rgba(124,199,255,${(0.9 * (1 - t)).toFixed(2)})`;
@@ -770,6 +852,19 @@ function draw() {
     ctx.stroke();
   }
 
+  // Message shown while the triple shot is fully charged
+  if (ship.charged && !ship.dead) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font      = 'bold 17px monospace';
+    ctx.fillStyle = '#ffb347';
+    ctx.fillText('CHARGE READY!', ship.x, ship.y + 30);
+    ctx.font      = '12px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('RELEASE TO FIRE TRIPLE', ship.x, ship.y + 44);
+    ctx.restore();
+  }
+
   drawPopups();
   drawHUD();
 
@@ -777,7 +872,7 @@ function draw() {
     drawOverlay('GAME OVER', `SCORE: ${score}   —   SPACE TO RESTART`);
 }
 
-/* =========================== Loop principal =========================== */
+/* ============================ MAIN LOOP ============================ */
 let lastTime = null;
 
 function loop(ts) {
