@@ -28,6 +28,10 @@ const wrap  = (v, max) => ((v % max) + max) % max;
 const dist  = (a, b)   => Math.hypot(a.x - b.x, a.y - b.y);
 const rand  = (min, max) => min + Math.random() * (max - min);
 const randInt = (min, max) => Math.floor(rand(min, max + 1));
+const hexToRgb = hex => {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
 
 /* ================================== BULLET ================================== */
 class Bullet {
@@ -117,6 +121,110 @@ class Asteroid {
       ctx.lineTo(this.verts[i][0], this.verts[i][1]);
     ctx.closePath();
     ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ========================= SHOOTING STAR ========================= */
+const STAR_POINTS    = 1000;
+const STAR_LIFETIME  = 30;       // seconds — fades out in place if still on screen
+const STAR_MIN_SPEED = 150;      // px/s — faster than asteroids (~100 max)
+const STAR_MAX_SPEED = 200;
+
+// Draws a 5-pointed star path centered at (x, y)
+function starPath(ctx, x, y, outer, inner) {
+  ctx.beginPath();
+  let rot = -Math.PI / 2;
+  const step = Math.PI / 5;
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    ctx.lineTo(x + Math.cos(rot) * r, y + Math.sin(rot) * r);
+    rot += step;
+  }
+  ctx.closePath();
+}
+
+class ShootingStar {
+  constructor() {
+    // Spawn at a random edge, cross to a random point on the opposite edge
+    const edge = randInt(0, 3);
+    let tx, ty;
+    if (edge === 0)      { this.x = rand(0, W); this.y = 0;         tx = rand(0, W);   ty = H; }
+    else if (edge === 1) { this.x = W;          this.y = rand(0, H); tx = 0;           ty = rand(0, H); }
+    else if (edge === 2) { this.x = rand(0, W); this.y = H;         tx = rand(0, W);   ty = 0; }
+    else                 { this.x = 0;          this.y = rand(0, H); tx = W;           ty = rand(0, H); }
+
+    const angle = Math.atan2(ty - this.y, tx - this.x);
+    const speed = rand(STAR_MIN_SPEED, STAR_MAX_SPEED);
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+
+    this.radius  = 10;   // hit radius
+    this.trail   = [];   // recent positions, for the streak
+    this.age     = 0;
+    this.fading  = false;
+    this.fadeTtl = 0;
+    this.alpha   = 1;
+    this.dead    = false;
+  }
+
+  update(dt) {
+    if (this.dead) return;
+    this.age += dt;
+
+    if (!this.fading) {
+      this.trail.push([this.x, this.y]);
+      if (this.trail.length > 14) this.trail.shift();
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+    }
+
+    // 30-second cap: stop and fade out in place
+    if (!this.fading && this.age >= STAR_LIFETIME) {
+      this.fading  = true;
+      this.fadeTtl = 0.6;
+    }
+    if (this.fading) {
+      this.fadeTtl -= dt;
+      this.alpha = Math.max(0, this.fadeTtl / 0.6);
+      if (this.fadeTtl <= 0) this.dead = true;
+      return;
+    }
+
+    // Fully off the screen (with margin for the trail) → gone
+    const M = 50;
+    if (this.x < -M || this.x > W + M || this.y < -M || this.y > H + M) this.dead = true;
+  }
+
+  draw() {
+    const headX = this.x;
+    const headY = this.y;
+
+    // Streak trail
+    for (let i = 1; i < this.trail.length; i++) {
+      const t = i / this.trail.length;
+      const [x0, y0] = this.trail[i - 1];
+      const [x1, y1] = this.trail[i];
+      ctx.strokeStyle = `rgba(110, 195, 255, ${(this.alpha * t * 0.7).toFixed(2)})`;
+      ctx.lineWidth   = t * 3 + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+
+    // Soft outer glow
+    ctx.save();
+    ctx.globalAlpha = this.alpha * 0.35;
+    ctx.fillStyle = '#59b6ff';
+    starPath(ctx, headX, headY, 16, 7);
+    ctx.fill();
+
+    // Bright core
+    ctx.globalAlpha = this.alpha;
+    ctx.fillStyle = '#dff2ff';
+    starPath(ctx, headX, headY, 10, 4.5);
+    ctx.fill();
     ctx.restore();
   }
 }
@@ -223,7 +331,8 @@ class Ship {
 
 /* =============== PARTICLES (explosion) =============== */
 class Particle {
-  constructor(x, y) {
+  constructor(x, y, color = '#fff') {
+    this.rgb = hexToRgb(color);
     this.x  = x;
     this.y  = y;
     const angle = rand(0, Math.PI * 2);
@@ -244,7 +353,7 @@ class Particle {
 
   draw() {
     const alpha = this.ttl / this.life;
-    ctx.strokeStyle = `rgba(255,255,255,${alpha.toFixed(2)})`;
+    ctx.strokeStyle = `rgba(${this.rgb[0]},${this.rgb[1]},${this.rgb[2]},${alpha.toFixed(2)})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
@@ -255,6 +364,9 @@ class Particle {
 
 /* ======================== GAME STATUS ======================== */
 let ship, bullets, asteroids, particles;
+let star;        // current ShootingStar, or null
+let starTimer;   // seconds until the next star appears
+let popups = []; // floating score popups
 let score, lives, level;
 let state; // 'playing' | 'dead' | 'gameover'
 let deadTimer;
@@ -275,6 +387,10 @@ function spawnAsteroids(count) {
   }
 }
 
+function scheduleStar() {
+  starTimer = rand(10, 30);
+}
+
 function initGame() {
   nextChainId = 0;
   chainState.clear();
@@ -282,6 +398,9 @@ function initGame() {
   bullets   = [];
   asteroids = [];
   particles = [];
+  popups    = [];
+  star      = null;
+  scheduleStar();
   score  = 0;
   lives  = 3;
   level  = 1;
@@ -297,8 +416,8 @@ function nextLevel() {
   spawnAsteroids(3 + level);
 }
 
-function explode(x, y, count = 8) {
-  for (let i = 0; i < count; i++) particles.push(new Particle(x, y));
+function explode(x, y, count = 8, color = '#fff') {
+  for (let i = 0; i < count; i++) particles.push(new Particle(x, y, color));
 }
 
 function killShip() {
@@ -319,6 +438,8 @@ function update(dt) {
     if (pressed('Space')) initGame();
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
+    popups.forEach(p => p.ttl -= dt);
+    popups = popups.filter(p => p.ttl > 0);
     return;
   }
 
@@ -326,6 +447,8 @@ function update(dt) {
     deadTimer -= dt;
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
+    popups.forEach(p => p.ttl -= dt);
+    popups = popups.filter(p => p.ttl > 0);
     asteroids.forEach(a => a.update(dt));
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
     return;
@@ -343,6 +466,17 @@ function update(dt) {
 
   bullets   = bullets.filter(b => !b.dead);
   particles = particles.filter(p => !p.dead);
+  popups.forEach(p => p.ttl -= dt);
+  popups = popups.filter(p => p.ttl > 0);
+
+  // Shooting star: spawn / advance / expire
+  if (!star) {
+    starTimer -= dt;
+    if (starTimer <= 0) star = new ShootingStar();
+  } else {
+    star.update(dt);
+    if (star.dead) { star = null; scheduleStar(); }
+  }
 
   // Bullet vs Asteroid
   const newAsteroids = [];
@@ -365,6 +499,21 @@ function update(dt) {
   }
   asteroids = asteroids.filter(a => !a.dead).concat(newAsteroids);
   bullets   = bullets.filter(b => !b.dead);
+
+  // Bullet vs Shooting Star
+  if (star) {
+    for (const b of bullets) {
+      if (!b.dead && dist(b, star) < star.radius) {
+        b.dead = true;
+        score += STAR_POINTS;
+        explode(star.x, star.y, 18, '#59b6ff');
+        popups.push({ x: star.x, y: star.y, text: `+${STAR_POINTS}`, ttl: 1, life: 1 });
+        star = null;
+        scheduleStar();
+        break;
+      }
+    }
+  }
 
   // Check for completed chains (large asteroid + all pieces destroyed)
   for (const [chainId, remaining] of chainState) {
@@ -431,15 +580,28 @@ function drawOverlay(title, sub) {
   ctx.fillText(sub, W / 2, H / 2 + 22);
 }
 
+function drawPopups() {
+  ctx.textAlign = 'center';
+  ctx.font      = 'bold 20px monospace';
+  for (const p of popups) {
+    const t = 1 - p.ttl / p.life;
+    ctx.globalAlpha = p.ttl / p.life;
+    ctx.fillStyle   = '#7cc7ff';
+    ctx.fillText(p.text, p.x, p.y - t * 30);
+  }
+  ctx.globalAlpha = 1;
+}
+
 function draw() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
 
   particles.forEach(p => p.draw());
   asteroids.forEach(a => a.draw());
+  if (star) star.draw();
   bullets.forEach(b => b.draw());
   ship.draw();
-
+  drawPopups();
   drawHUD();
 
   if (state === 'gameover')
