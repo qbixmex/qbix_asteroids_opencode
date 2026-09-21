@@ -244,18 +244,19 @@ class Ship {
     this.invincible    = 3;
     this.shootCooldown = 0;
     this.dead          = false;
-    this.boost         = 0;
+    this.shield        = 0;  // seconds of shield remaining (0 = none)
   }
 
-  activateBoost() {
-    this.boost = 5;
+  activateShield() {
+    this.shield = 5;
+    popups.push({ x: this.x, y: this.y - 32, text: 'SHIELD!', ttl: 1, life: 1 });
   }
 
   update(dt) {
     if (this.dead) return;
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
-    if (this.boost > 0) this.boost -= dt;
+    if (this.shield > 0) this.shield -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = 260;  // px/s²
@@ -266,9 +267,8 @@ class Ship {
 
     this.thrusting = !!keys['ArrowUp'];
     if (this.thrusting) {
-      const thrust = this.boost > 0 ? THRUST * 1.5 : THRUST;
-      this.vx += Math.cos(this.angle) * thrust * dt;
-      this.vy += Math.sin(this.angle) * thrust * dt;
+      this.vx += Math.cos(this.angle) * THRUST * dt;
+      this.vy += Math.sin(this.angle) * THRUST * dt;
     }
 
     this.vx *= DRAG;
@@ -291,18 +291,25 @@ class Ship {
     // Flicker during respawn invincibility
     if (this.invincible > 0 && Math.floor(this.invincible * 8) % 2 === 0) return;
 
-    // Boost flicker — gets faster as the 5 seconds run out
-    let boostFlicker = false;
-    if (this.boost > 0) {
-      const elapsed = 5 - this.boost;
-      const flickerRate = this.boost > 4 ? 8 : this.boost > 3 ? 10 : this.boost > 2 ? 12 : this.boost > 1 ? 14 : 16;
-      boostFlicker = Math.floor(elapsed * flickerRate) % 2 === 0;
-    }
-
     ctx.save();
     ctx.translate(this.x, this.y);
+
+    // Shield — glowing ring that fades as its 5 seconds run out
+    if (this.shield > 0) {
+      const t     = this.shield / 5;
+      const pulse = 1 + Math.sin(performance.now() / 130) * 0.05;
+      const r     = 20 * pulse;
+      ctx.fillStyle   = `rgba(120, 220, 255, ${(0.10 * t).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(120, 220, 255, ${(0.30 + 0.55 * t).toFixed(2)})`;
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+    }
+
     ctx.rotate(this.angle);
-    ctx.strokeStyle = this.boost > 0 ? (boostFlicker ? '#ff0' : '#fff') : '#fff';
+    ctx.strokeStyle = '#fff';
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
@@ -518,7 +525,7 @@ function update(dt) {
   // Check for completed chains (large asteroid + all pieces destroyed)
   for (const [chainId, remaining] of chainState) {
     if (remaining === 0) {
-      ship.activateBoost();
+      ship.activateShield();
       chainState.delete(chainId);
     }
   }
@@ -527,11 +534,21 @@ function update(dt) {
   if (ship.invincible <= 0) {
     for (const a of asteroids) {
       if (dist(ship, a) < ship.radius + a.radius * 0.82) {
-        killShip();
-        break;
+        if (ship.shield > 0) {
+          // Shield absorbs the hit and vaporizes the asteroid
+          a.dead = true;
+          score += POINTS[a.size];
+          explode(a.x, a.y, a.size * 5);
+          const chain = chainState.get(a.chainId);
+          if (chain !== undefined) chainState.set(a.chainId, chain - 1);
+        } else {
+          killShip();
+          break;
+        }
       }
     }
   }
+  asteroids = asteroids.filter(a => !a.dead);
 
   // Completed Level
   if (asteroids.length === 0) nextLevel();
