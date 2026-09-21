@@ -29,6 +29,7 @@ Then visit `http://localhost:3000`.
 | `←` `→`   | Rotate ship |
 | `↑`       | Thrust      |
 | `Space`   | Shoot       |
+| `Space` + `Alt/Option` (⌥, hold 3s, release) | Fire a **super shoot** (double damage, 3 per level) |
 
 ## Scoring
 
@@ -43,5 +44,6 @@ Then visit `http://localhost:3000`.
 
 - 3 lives with temporary invincibility upon respawning (flicker effect)
 - Asteroids split into smaller fragments when destroyed
+- **Super shoot**: hold `Space` + `Alt`/`Option` (`⌥`) for 3s to charge, then **release the keys to fire** a big shot that vaporizes an entire asteroid chain at once (double damage). Releasing before the bar is full cancels the charge. You get 3 super shoots per level — track them via the cyan HUD icons and charge bar.
 - Explosion particles when destroying asteroids
 - A blue shooting star suddenly streaks across the screen at random intervals — shoot it for 1000 points before it fades away or flies off-screen
