@@ -230,21 +230,33 @@ class ShootingStar {
 }
 
 /* ========================= SHIP ========================= */
+const CHARGE_TIME    = 2.0;  // segundos sosteniendo Shift+Space para cargar la ráfaga
+const BURST_SHOTS    = 3;    // disparos por ráfaga
+const BURST_INTERVAL = 0.1;  // segundos entre disparos de la ráfaga
+
 class Ship {
   constructor() { this.reset(); }
 
   reset() {
-    this.x      = W / 2;
-    this.y      = H / 2;
-    this.angle  = -Math.PI / 2;
-    this.vx     = 0;
-    this.vy     = 0;
-    this.radius = 12;
-    this.thrusting     = false;
-    this.invincible    = 3;
+    this.x         = W / 2;
+    this.y         = H / 2;
+    this.angle     = -Math.PI / 2;
+    this.vx        = 0;
+    this.vy        = 0;
+    this.radius    = 12;
+    this.thrusting = false;
+    this.invincible = 3;
+    this.dead      = false;
+    this.boost     = 0;
+    // Disparo simple: Space pulsado dispara 1 bala (como antes)
     this.shootCooldown = 0;
-    this.dead          = false;
-    this.boost         = 0;
+    // Ráfaga triple: mantener Shift+Space 3 s y soltar
+    this.chargeHold  = 0;        // segundos acumulados con Shift+Space pulsados
+    this.charged     = false;    // carga completa (≥ 3 s): al soltar dispara 3
+    this.wasSpaceHeld = false;   // estado de Space en el frame anterior
+    this.burst       = 0;        // disparos restantes de la ráfaga actual
+    this.burstTimer  = 0;        // tiempo hasta el siguiente disparo
+    this.burstFlash  = 0;        // destello visual al disparar la ráfaga
   }
 
   activateBoost() {
@@ -253,7 +265,8 @@ class Ship {
 
   update(dt) {
     if (this.dead) return;
-    if (this.invincible    > 0) this.invincible    -= dt;
+    if (this.invincible > 0) this.invincible -= dt;
+    if (this.burstFlash > 0) this.burstFlash -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.boost > 0) this.boost -= dt;
 
@@ -286,6 +299,52 @@ class Ship {
     return [new Bullet(ox, oy, this.angle)];
   }
 
+  // Ráfaga triple: mantener Shift+Space 3 s y soltar → 3 disparos seguidos.
+  // Soltar Space antes de 3 s no dispara nada. Space sin Shift lo maneja tryShoot.
+  shootCharge(dt) {
+    if (this.dead) return [];
+
+    const spaceHeld = !!keys['Space'];
+    const shiftHeld = !!(keys['ShiftLeft'] || keys['ShiftRight']);
+
+    if (spaceHeld && shiftHeld) {
+      // Cargar solo mientras se mantienen pulsados Shift y Space
+      if (!this.charged) {
+        this.chargeHold += dt;
+        if (this.chargeHold >= CHARGE_TIME) this.charged = true;
+      }
+    } else {
+      // Soltar Space: si la carga estaba completa, dispara la ráfaga triple
+      if (this.wasSpaceHeld && !spaceHeld && this.charged) {
+        this.burst      = BURST_SHOTS;
+        this.burstTimer = 0;        // primer disparo inmediato
+        this.burstFlash = 0.35;
+      }
+      // Al soltar Space se reinicia la carga (si solo se soltó Shift, se pausa)
+      if (!spaceHeld) {
+        this.chargeHold = 0;
+        this.charged    = false;
+      }
+    }
+    this.wasSpaceHeld = spaceHeld;
+
+    // Desplegar la ráfaga (tras soltar, aunque ya no haya teclas pulsadas)
+    const shots = [];
+    if (this.burst > 0) {
+      this.burstTimer -= dt;
+      if (this.burstTimer <= 0) {
+        const NOSE = 21;
+        const ox = this.x + Math.cos(this.angle) * NOSE;
+        const oy = this.y + Math.sin(this.angle) * NOSE;
+        shots.push(new Bullet(ox, oy, this.angle));
+        this.burst--;
+        this.burstTimer = BURST_INTERVAL;
+        this.burstFlash = 0.18;
+      }
+    }
+    return shots;
+  }
+
   draw() {
     if (this.dead) return;
     // Flicker during respawn invincibility
@@ -297,6 +356,23 @@ class Ship {
       const elapsed = 5 - this.boost;
       const flickerRate = this.boost > 4 ? 8 : this.boost > 3 ? 10 : this.boost > 2 ? 12 : this.boost > 1 ? 14 : 16;
       boostFlicker = Math.floor(elapsed * flickerRate) % 2 === 0;
+    }
+
+    // Brillo de carga y destello de la ráfaga (detrás de la nave)
+    const charge = Math.min(1, this.chargeHold / CHARGE_TIME);
+    const t      = this.charged ? 1 : charge;
+    const flash  = this.burstFlash > 0 ? Math.min(1, this.burstFlash / 0.35) : 0;
+    if (t > 0 || flash > 0) {
+      const glowR = 24 + t * 14 + flash * 10;
+      const glowA = 0.15 + t * 0.4 + flash * 0.4;
+      const cr = 255;
+      const cg = Math.round(255 - t * 115);
+      const cb = Math.round(255 - t * 255);
+      const grad = ctx.createRadialGradient(this.x, this.y, 6, this.x, this.y, glowR);
+      grad.addColorStop(0, `rgba(${cr},${cg},${cb},${glowA})`);
+      grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(this.x - glowR, this.y - glowR, glowR * 2, glowR * 2);
     }
 
     ctx.save();
@@ -454,10 +530,13 @@ function update(dt) {
     return;
   }
 
-  // Disparar
-  if (pressed('Space')) {
+  // Disparo simple: pulsar Space sin Shift → 1 bala (como antes)
+  const withShift = !!(keys['ShiftLeft'] || keys['ShiftRight']);
+  if (pressed('Space') && !withShift) {
     bullets.push(...ship.tryShoot());
   }
+  // Ráfaga triple: mantener Shift+Space 3 s y soltar
+  bullets.push(...ship.shootCharge(dt));
 
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
@@ -601,6 +680,20 @@ function draw() {
   if (star) star.draw();
   bullets.forEach(b => b.draw());
   ship.draw();
+
+  // Mensaje cuando la ráfaga triple está lista (carga completa)
+  if (ship.charged && !ship.dead) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font      = 'bold 17px monospace';
+    ctx.fillStyle = '#ffb347';
+    ctx.fillText('¡CARGA COMPLETA!', ship.x, ship.y + 30);
+    ctx.font      = '12px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('SUELTA PARA DISPARAR TRIPLE', ship.x, ship.y + 44);
+    ctx.restore();
+  }
+
   drawPopups();
   drawHUD();
 
