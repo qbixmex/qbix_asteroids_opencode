@@ -1,45 +1,45 @@
 # Asteroids
 
-Clon del clásico arcade **Asteroids** implementado en canvas HTML5 puro, sin dependencias ni bundler.
+A clone of the classic arcade game **Asteroids**, implemented using pure HTML5 Canvas with no dependencies or bundlers.
 
-## Descripción
+## Description
 
-Nave espacial en un campo de asteroides con envolvimiento de bordes (el espacio es toroidal). Destruye asteroides para sumar puntos: los grandes se parten en medianos, los medianos en pequeños. Incluye power-ups especiales y tipos de asteroides únicos como la estrella fugaz.
+Pilot a spaceship through an asteroid field featuring screen wrapping (toroidal space). Destroy asteroids to score points: large ones split into medium ones, and medium ones into small ones. Includes special power-ups and unique asteroid types, such as the shooting star.
 
-## Tecnologías
+## Technologies
 
-- **HTML5 Canvas** — renderizado 2D
-- **JavaScript (ES6+)** — lógica del juego en un solo archivo `game.js`
-- Sin frameworks, sin bundler, sin dependencias
+- **HTML5 Canvas** — 2D rendering
+- **JavaScript (ES6+)** — game logic contained in a single `game.js` file
+- No frameworks, no bundlers, no dependencies
 
-## Cómo correr
+## How to Run
 
-Abre `index.html` directamente en el navegador (doble clic), o usa un servidor local:
+Open `index.html` directly in your browser (double-click), or use a local server:
 
 ```bash
 npx serve .
 ```
 
-Luego visita `http://localhost:3000`.
+Then visit `http://localhost:3000`.
 
-## Controles
+## Controls
 
-| Tecla     | Acción     |
-| --------- | ---------- |
-| `←` `→`   | Rotar nave |
-| `↑`       | Propulsar  |
-| `Espacio` | Disparar   |
+| Key       | Action      |
+| --------- | ----------- |
+| `←` `→`   | Rotate ship |
+| `↑`       | Thrust      |
+| `Space`   | Shoot       |
 
-## Puntuación
+## Scoring
 
-| Asteroide | Puntos |
-| --------- | ------ |
-| Grande    | 20     |
-| Mediano   | 50     |
-| Pequeño   | 100    |
+| Asteroid | Points |
+| -------- | ------ |
+| Large    | 20     |
+| Medium   | 50     |
+| Small    | 100    |
 
-## Características
+## Features
 
-- 3 vidas con invencibilidad temporal al reaparecer (parpadeo)
-- Asteroides se parten en fragmentos más pequeños al ser destruidos
-- Partículas de explosión al destruir asteroides
+- 3 lives with temporary invincibility upon respawning (flicker effect)
+- Asteroids split into smaller fragments when destroyed
+- Explosion particles when destroying asteroids
